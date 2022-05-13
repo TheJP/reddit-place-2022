@@ -1,5 +1,12 @@
 use image::{ImageBuffer, Rgb};
-use std::{collections::HashMap, env::args, fs, io::BufRead, path::PathBuf, str};
+use std::{
+    collections::{HashMap, HashSet},
+    env::args,
+    fs,
+    io::BufRead,
+    path::PathBuf,
+    str,
+};
 
 use reddit_place_2022::{
     access::{Access, Location},
@@ -36,7 +43,7 @@ fn create_colour_map(colours: &[&'static str]) -> HashMap<&'static str, [u8; 3]>
 }
 
 /// Count edits inside of bounds.
-fn _count_access_in_bounds(bounds: ((u32, u32), (u32, u32))) {
+fn count_access_in_bounds(bounds: ((u32, u32), (u32, u32))) {
     let folder = fs::read_to_string("dataset_folder.txt").unwrap();
     let mut count = 0;
 
@@ -52,7 +59,7 @@ fn _count_access_in_bounds(bounds: ((u32, u32), (u32, u32))) {
             .map(|acc| acc.coords())
             .filter(|location| match *location {
                 Location::Coords(x, y) => {
-                    bounds.0 .0 <= x && x <= bounds.1 .0 && bounds.0 .1 <= y && y <= bounds.1 .1
+                    bounds.0 .0 <= x && x < bounds.1 .0 && bounds.0 .1 <= y && y < bounds.1 .1
                 }
                 Location::Range(_x1, _y1, _x2, _y2) => false,
             })
@@ -80,7 +87,7 @@ fn create_images(bounds: ((u32, u32), (u32, u32)), spacing: u32) {
         let path = PathBuf::from(&folder).join(filename);
         let reader = open_dataset(path).unwrap();
 
-        let in_bound_access = reader
+        let in_bounds_access = reader
             .split(b'\n')
             .map(Result::unwrap)
             .map(Access::new)
@@ -92,7 +99,7 @@ fn create_images(bounds: ((u32, u32), (u32, u32)), spacing: u32) {
                 bounds.0 .0 <= x && x < bounds.1 .0 && bounds.0 .1 <= y && y < bounds.1 .1
             });
 
-        for ((x, y), access) in in_bound_access {
+        for ((x, y), access) in in_bounds_access {
             let colour = colour_map[access.colour()];
             image[(x - bounds.0 .0, y - bounds.0 .1)] = Rgb(colour);
             if access_counter % spacing == 0 {
@@ -108,17 +115,134 @@ fn create_images(bounds: ((u32, u32), (u32, u32)), spacing: u32) {
     }
 }
 
+/// Print every access that is in bounds.
+fn print_every_access(bounds: ((u32, u32), (u32, u32))) {
+    let folder = fs::read_to_string("dataset_folder.txt").unwrap();
+
+    for number in FILE_ORDER {
+        let filename = create_file_name(number);
+        let path = PathBuf::from(&folder).join(filename);
+        let reader = open_dataset(path).unwrap();
+
+        let in_bounds_access = reader
+            .split(b'\n')
+            .map(Result::unwrap)
+            .map(Access::new)
+            .filter(|access| match access.coords() {
+                Location::Coords(x, y) => {
+                    bounds.0 .0 <= x && x < bounds.1 .0 && bounds.0 .1 <= y && y < bounds.1 .1
+                }
+                Location::Range(_x1, _y1, _x2, _y2) => false,
+            });
+
+        for access in in_bounds_access {
+            println!("{:?}", access);
+        }
+    }
+}
+
+/// Print every access that is for the given `user_id`.
+fn print_access_by(user_id: &str) {
+    let mut count = 0;
+    let folder = fs::read_to_string("dataset_folder.txt").unwrap();
+
+    for number in FILE_ORDER {
+        let filename = create_file_name(number);
+        let path = PathBuf::from(&folder).join(filename);
+        let reader = open_dataset(path).unwrap();
+
+        let user_access = reader
+            .split(b'\n')
+            .map(Result::unwrap)
+            .map(Access::new)
+            .filter(|access| access.user_id() == user_id);
+
+        for access in user_access {
+            println!("{:?}", access);
+            count += 1;
+        }
+    }
+
+    println!("Total: {}", count);
+}
+
+// Creates image, containing only the pixels that the given user changed.
+fn image_of_single_user(user_id: &str, background: u8) {
+    // Ensure target path is valid.
+    fs::create_dir_all("images").unwrap();
+
+    let folder = fs::read_to_string("dataset_folder.txt").unwrap();
+    let colour_map = create_colour_map(COLOURS);
+
+    let mut image = ImageBuffer::new(2000, 2000);
+    image.fill(background);
+
+    let mut duplicate_count = 0;
+    let mut pixel_duplicates = HashSet::new();
+
+    for number in FILE_ORDER {
+        let filename = create_file_name(number);
+        let path = PathBuf::from(&folder).join(filename);
+        let reader = open_dataset(path).unwrap();
+
+        let user_access = reader
+            .split(b'\n')
+            .map(Result::unwrap)
+            .map(Access::new)
+            .filter_map(|access| match access.coords() {
+                Location::Coords(x, y) => Some(((x, y), access)),
+                Location::Range(_, _, _, _) => None,
+            })
+            .filter(|(_, access)| access.user_id() == user_id);
+
+        for ((x, y), access) in user_access {
+            let colour = colour_map[access.colour()];
+            image[(x, y)] = Rgb(colour);
+
+            if !pixel_duplicates.insert((x, y)) {
+                duplicate_count += 1;
+            }
+        }
+    }
+
+    println!("Duplicate Positions: {}", duplicate_count);
+    image
+        .save_with_format("images/user.png", image::ImageFormat::Png)
+        .unwrap();
+}
+
 fn main() {
+    let args_len = args().len();
+
     let bounds;
-    if args().len() == 1 {
+    if [1, 2].contains(&args_len) {
         bounds = ((448, 646), (599, 683));
+        // 1653 620 1744 640
+        // 250 1850 312 1891
     } else {
-        assert_eq!(5, args().len());
+        assert!([5, 6].contains(&args_len));
         let args = args()
-            .skip(1)
+            .skip(args_len - 4)
             .map(|arg| arg.parse().unwrap())
             .collect::<Vec<_>>();
         bounds = ((args[0], args[1]), (args[2], args[3]));
     }
-    create_images(bounds, 100);
+
+    let command = if [2, 6].contains(&args_len) {
+        args().nth(1).unwrap()
+    } else {
+        "timelapse".to_string()
+    };
+
+    let user_id = fs::read_to_string("user_id.txt").unwrap();
+    let user_id = user_id.trim();
+
+    match command.as_str() {
+        "timelapse" => create_images(bounds, 100),
+        "count-access" => count_access_in_bounds(bounds),
+        "print-all" => print_every_access(bounds),
+        "find-user" => print_access_by(user_id),
+        "user" => image_of_single_user(user_id, 0x33),
+        _ => eprintln!("Unknown sub-command"),
+    }
 }

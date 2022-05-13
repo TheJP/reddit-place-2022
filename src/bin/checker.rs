@@ -3,10 +3,7 @@
 
 use std::{fs, io::BufRead, path::PathBuf};
 
-use reddit_place_2022::{
-    access::Access,
-    open_dataset, create_file_name, NUM_FILES,
-};
+use reddit_place_2022::{access::Access, create_file_name, open_dataset, NUM_FILES};
 
 fn main() {
     let folder = fs::read_to_string("dataset_folder.txt").unwrap();
